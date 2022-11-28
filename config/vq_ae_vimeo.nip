@@ -1,0 +1,99 @@
+experiment_params:
+  path: &path "/data/shared/svc/experiments"
+  dataset_root: &dataset_root "/data/shared/svc/datasets/vimeo90k/vimeo_septuplet"
+  dataloader_workers: &dataloader_workers 12
+  image_resolution: &image_resolution (256, 256)
+
+  gpu: &gpu 0
+
+  lr: &lr 1e-3
+  epochs: &epochs 1000
+  batch_size: &batch_size 16
+
+  scales: &scales (128, 160, 192, 192)
+  n_residual_blocks: &n_residual_blocks 3
+  code_book_size: &code_book_size 1024
+  vq_ema_decay: &vq_ema_decay 0.8
+  vq_commit_weight: &vq_commit_weight 1.
+
+  commit_weight: &commit_weight 1.
+
+
+### Trainer
+trainer: !Trainer
+  deterministic: False
+  benchmark: True
+  gpus: `[gpu]`
+  max_epochs: *epochs
+  logger: !NeptuneLogger
+    project: timeescaper/vq-vic
+    log_model_checkpoints: True
+    tags:
+      - "vq"
+      - "vimeo"
+  callbacks:
+    - !ModelCheckpoint
+      save_top_k: 1
+      save_last: True
+      every_n_epochs: 1
+  check_val_every_n_epoch: 5
+  log_every_n_steps: 1
+
+
+### Datasets
+train_dataset: &train_dataset !VimeoImagesDataset
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_trainlist.txt"`
+  segment: (0, 3500)
+  transform: !Compose
+    transforms:
+      - !CenterCrop
+        size: *image_resolution
+      - !ToTensor
+
+val_dataset: &val_dataset !VimeoImagesDataset
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_testlist.txt"`
+  segment: (0, 500)
+  transform: !Compose
+    transforms:
+      - !CenterCrop
+        size: *image_resolution
+      - !ToTensor
+
+train_dataloader: !DataLoader
+  dataset: *train_dataset
+  batch_size: *batch_size
+  shuffle: true
+  num_workers: *dataloader_workers
+
+val_dataloader: !DataLoader
+  dataset: *val_dataset
+  batch_size: *batch_size
+  shuffle: false
+  num_workers: *dataloader_workers
+
+
+# Model
+model: &model !VectorQuantizedAE
+  code_book_size: *code_book_size
+  vq_ema_decay: *vq_ema_decay
+  vq_commit_weight: *vq_commit_weight
+  encoder: !ConvEncoder
+    channels: *scales
+    n_residual_blocks: *n_residual_blocks
+  decoder: !ConvDecoder
+    channels: `scales[::-1]`
+    n_residual_blocks: *n_residual_blocks
+
+
+### Lightning Module
+pl_module: !LitAutoEncoderModule
+  model: *model
+  optimizer: !Adam
+    lr: *lr
+    params: `model.parameters()`
+  loss: !DistortionLoss
+    aux_weights: `{'loss_commit': commit_weight}`
+  sample_train: `train_dataset[0]`
+  sample_val: `val_dataset[0]`
