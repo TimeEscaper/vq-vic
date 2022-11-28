@@ -70,7 +70,9 @@ class LitAutoEncoderModule(pl.LightningModule):
         gap = np.ones((rec_image.shape[0], 70, 3), dtype=rec_image.dtype)
         paired_image = np.concatenate([gt_image, gap, rec_image], axis=1)
 
-        psnr = cv2.PSNR(gt_image, rec_image)
+        gt_image_cv2 = LitAutoEncoderModule._neptune_image_to_cv2(gt_image)
+        rec_image_cv2 = LitAutoEncoderModule._neptune_image_to_cv2(rec_image)
+        psnr = cv2.PSNR(gt_image_cv2, rec_image_cv2)
 
         self.log(f"{phase}_sample_psnr", psnr)
         self.logger.experiment[f"{phase}_sample_image"].log(NeptuneFile.as_image(paired_image))
