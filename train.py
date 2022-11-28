@@ -14,6 +14,8 @@ from pytorch_lightning.loggers import NeptuneLogger
 import lib
 
 
+_SEED = 42
+
 _KEY_EXPERIMENT_NAME = "experiment_name"
 
 
@@ -50,6 +52,7 @@ def train(config: str):
     config:
         Path to config file.
     """
+    pl.seed_everything(_SEED)
     nip.run(config, _train,
             verbose=False, return_configs=False, config_parameter='config', nonsequential=True)
 
