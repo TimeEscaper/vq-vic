@@ -171,6 +171,8 @@ class VectorQuantizedAE2(nn.Module):
     ):
         super(VectorQuantizedAE2, self).__init__()
 
+        self._code_book_dim = code_book_dim
+
         self.enc_b = encoder_bottom  # Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4)
         self.enc_t = encoder_top # Encoder(channel, channel, n_res_block, n_res_channel, stride=2)
 
@@ -203,9 +205,13 @@ class VectorQuantizedAE2(nn.Module):
         #     stride=4,
         # )
 
+    @property
+    def code_book_dim(self) -> int:
+        return self._code_book_dim
+
     def forward(self, input):
         output = self.encode(input)
-        dec = self.decode(output["y_top"], output["y_bottom"])
+        dec = self.decode(output)
         output.update(dec)
         return output
 
@@ -234,7 +240,9 @@ class VectorQuantizedAE2(nn.Module):
 
         # return quant_t, quant_b, diff_t + diff_b, id_t, id_b
 
-    def decode(self, quant_t, quant_b):
+    def decode(self, output):
+        quant_t = output["y_top"]
+        quant_b = output["y_bottom"]
         upsample_t = self.upsample_t(quant_t)
         quant = torch.cat([upsample_t, quant_b], 1)
         dec = self.dec(quant)

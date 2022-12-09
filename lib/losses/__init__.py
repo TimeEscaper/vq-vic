@@ -1,1 +1,1 @@
-from .compression_losses import DistortionLoss
+from .compression_losses import DistortionLoss, RateDistortionLoss
