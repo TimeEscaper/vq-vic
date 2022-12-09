@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -63,7 +64,15 @@ class LitAutoEncoderModule(pl.LightningModule):
             return
 
         gt_image = self._samples[phase]
-        rec_image = self.forward(gt_image.unsqueeze(0).to(self.device))["x_hat"][0]
+        model_output = self.forward(gt_image.unsqueeze(0).to(self.device))
+
+        bpp = 0.
+        num_pixels = gt_image.shape[1] * gt_image.shape[2]
+        for k, v in model_output.items():
+            if k.endswith("_likelihoods"):
+                bpp = bpp + (torch.log(v).sum() / (-math.log(2) * num_pixels))
+
+        rec_image = model_output["x_hat"][0]
 
         gt_image = LitAutoEncoderModule._tensor_to_neptune_image(gt_image)
         rec_image = LitAutoEncoderModule._tensor_to_neptune_image(rec_image)
@@ -75,6 +84,7 @@ class LitAutoEncoderModule(pl.LightningModule):
         psnr = cv2.PSNR(gt_image_cv2, rec_image_cv2)
 
         self.log(f"{phase}_sample_psnr", psnr)
+        self.log(f"{phase}_sample_bpp", bpp)
         self.logger.experiment[f"{phase}_sample_image"].log(NeptuneFile.as_image(paired_image))
 
     @staticmethod
