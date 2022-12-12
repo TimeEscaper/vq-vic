@@ -1,1 +1,3 @@
-from .transformer_models import TransformerAREntropyModel, TopBottomTransformerAREntropyModel
+from .transformer_models import TransformerAREntropyModel
+from .pixel_snail import PixelSNAIL
+from .joint_models import TopBottomTransformerAREntropyModel, TopBottomPixelSNAIL
