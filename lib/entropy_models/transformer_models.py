@@ -71,7 +71,7 @@ class TransformerAREntropyModel(nn.Module):
         # x: (B, C, H, W) or (B, H, W)
         if self._input_mode == TransformerAREntropyModel.MODE_INDICES:
             x = F.one_hot(x, num_classes=self._code_book_size)
-            x = x.permute(0, 3, 1, 2)  # B, C, H, W
+            x = x.permute(0, 3, 1, 2).float()  # B, C, H, W
 
         B, C, H, W = x.shape
         x_unfold = F.unfold(x, kernel_size=self._block_size, padding=(self._block_size[0] // 2,
