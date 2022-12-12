@@ -12,6 +12,8 @@ from . import datasets
 from . import lightning_modules
 from . import losses
 from . import models
+from . import entropy_models
+from . import utils
 
 nip(nn)
 nip(optim)

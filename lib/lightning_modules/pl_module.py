@@ -66,11 +66,7 @@ class LitAutoEncoderModule(pl.LightningModule):
         gt_image = self._samples[phase]
         model_output = self.forward(gt_image.unsqueeze(0).to(self.device))
 
-        bpp = 0.
-        num_pixels = gt_image.shape[1] * gt_image.shape[2]
-        for k, v in model_output.items():
-            if k.endswith("_likelihoods"):
-                bpp = bpp + (torch.log(v).sum() / (-math.log(2) * num_pixels))
+        bpp = LitAutoEncoderModule._estimate_bpp(model_output)
 
         rec_image = model_output["x_hat"][0]
 
@@ -86,6 +82,36 @@ class LitAutoEncoderModule(pl.LightningModule):
         self.log(f"{phase}_sample_psnr", psnr)
         self.log(f"{phase}_sample_bpp", bpp)
         self.logger.experiment[f"{phase}_sample_image"].log(NeptuneFile.as_image(paired_image))
+
+    @staticmethod
+    def _estimate_bpp(model_output: Dict[str, torch.Tensor]) -> float:
+        num_pixels = model_output["x_hat"].shape[2] * model_output["x_hat"].shape[3]
+        bpp = 0.
+        need_raw_probs = True
+
+        for k, v in model_output.items():
+            if k.endswith("_likelihoods"):
+                bpp = bpp + (torch.log(v).sum() / (-math.log(2) * num_pixels))
+                need_raw_probs = False
+        if not need_raw_probs:
+            return bpp.item()
+
+        for name in ("top", "bottom"):
+            if f"y_{name}_probs_raw" not in model_output:
+                continue
+            probs = model_output[f"y_{name}_probs_raw"][0]
+            probs = torch.softmax(probs, dim=0)
+            if torch.isnan(probs).any() or torch.isinf(probs).any():
+                return bpp
+
+            log_prob = 0
+            for h in range(probs.shape[1]):
+                for w in range(probs.shape[2]):
+                    prob = probs[model_output[f"y_{name}_indices"][0, h, w].item(), h, w]
+                    log_prob = log_prob + torch.log(prob)
+            bpp = bpp + log_prob / (-math.log(2) * num_pixels)
+
+        return bpp
 
     @staticmethod
     def _tensor_to_neptune_image(image: torch.Tensor) -> np.ndarray:
