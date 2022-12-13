@@ -12,10 +12,12 @@ class TopBottomTransformerAREntropyModel(nn.Module):
 
     def __init__(self,
                  top_model: TransformerAREntropyModel,
-                 bottom_model: TransformerAREntropyModel):
+                 bottom_model: TransformerAREntropyModel,
+                 ignore: Optional[str] = None):
         super(TopBottomTransformerAREntropyModel, self).__init__()
         self._top_model = top_model
         self._bottom_model = bottom_model
+        self._ignore = ignore
 
     def top_parameters(self):
         return self._top_model.parameters()
@@ -26,10 +28,12 @@ class TopBottomTransformerAREntropyModel(nn.Module):
     def forward(self, encoder_output: Dict[str, torch.Tensor], output_softmax: bool = False) -> Dict[str, torch.Tensor]:
         output_dict = {}
 
-        TopBottomTransformerAREntropyModel._forward_single(self._top_model, "top", encoder_output, output_dict,
-                                                           output_softmax)
-        TopBottomTransformerAREntropyModel._forward_single(self._bottom_model, "bottom", encoder_output, output_dict,
-                                                           output_softmax)
+        if self._ignore != "top":
+            TopBottomTransformerAREntropyModel._forward_single(self._top_model, "top", encoder_output, output_dict,
+                                                               output_softmax)
+        if self._ignore != "bottom":
+            TopBottomTransformerAREntropyModel._forward_single(self._bottom_model, "bottom", encoder_output, output_dict,
+                                                               output_softmax)
 
         return output_dict
 
@@ -46,17 +50,26 @@ class TopBottomPixelSNAIL(nn.Module):
 
     def __init__(self,
                  top_model: PixelSNAIL,
-                 bottom_model: PixelSNAIL):
+                 bottom_model: PixelSNAIL,
+                 ignore: Optional[str] = None):
         super(TopBottomPixelSNAIL, self).__init__()
         self._top_model = top_model
         self._bottom_model = bottom_model
+        self._ignore = ignore
+
+    def top_parameters(self):
+        return self._top_model.parameters()
+
+    def bottom_parameters(self):
+        return self._bottom_model.parameters()
 
     def forward(self, encoder_output: Dict[str, torch.Tensor], output_softmax: bool = False) -> Dict[str, torch.Tensor]:
         output_dict = {}
         top = TopBottomPixelSNAIL._forward_single(self._top_model, "top", encoder_output, output_dict,
                                                   output_softmax)
-        _ = TopBottomPixelSNAIL._forward_single(self._bottom_model, "bottom", encoder_output, output_dict,
-                                                output_softmax, condition=top)
+        if self._ignore != "bottom":
+            _ = TopBottomPixelSNAIL._forward_single(self._bottom_model, "bottom", encoder_output, output_dict,
+                                                    output_softmax, condition=top)
         return output_dict
 
     @staticmethod
