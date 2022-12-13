@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
+from tqdm import tqdm
 from nip import nip
 from .transformer_models import TransformerAREntropyModel
 from .pixel_snail import PixelSNAIL
@@ -72,6 +73,11 @@ class TopBottomPixelSNAIL(nn.Module):
                                                     output_softmax, condition=top)
         return output_dict
 
+    def compress(self, encoder_output: Dict[str, torch.Tensor]) -> Dict[str, Any]:
+        output_dict = {}
+
+        TopBottomPixelSNAIL._compress_single(self._top_model, "top", encoder_output, condition=None)
+
     @staticmethod
     def _forward_single(model: PixelSNAIL, name: str, encoder_output: Dict[str, torch.Tensor],
                         output_dict: Dict[str, torch.Tensor], output_softmax: bool,
@@ -81,3 +87,34 @@ class TopBottomPixelSNAIL(nn.Module):
         output_dict[out_key] = model.forward(encoder_output[in_key], output_softmax=output_softmax,
                                              condition=condition)[0]
         return encoder_output[in_key]
+
+    @staticmethod
+    def _compress_single(model: PixelSNAIL, name: str, encoder_output: Dict[str, torch.Tensor],
+                         condition: Optional[torch.Tensor] = None):
+        latent = encoder_output[f"y_{name}" if model.input_mode == "vectors" else f"y_{name}_indices"]
+        if len(latent.shape) == 4:
+            B, _, H, W = latent.shape
+        else:
+            B, H, W = latent.shape
+
+        row = torch.zeros(B, H, W, dtype=torch.int64).to(latent.device)
+        probs = torch.zeros(B, model.n_class, H, W).to(latent.device)
+        cache = {}
+
+        strings = None
+
+        for i in tqdm(range(H), leave=False):
+            for j in tqdm(range(W), leave=False):
+                if len(latent.shape) == 4:
+                    prob, cache = model.forward(row[:, :, : i + 1, :], condition=condition, cache=cache,
+                                                output_softmax=True)
+                else:
+                    prob, cache = model.forward(row[:, : i + 1, :], condition=condition, cache=cache,
+                                                output_softmax=True)
+                row[:, i, j] = latent[:, i, j]
+                probs[:, :, i, j] = prob[:, :, i, j]
+
+        probs_pred, _ = model.forward(latent, condition=condition, cache=cache, output_softmax=True)
+        print(torch.allclose(probs, probs_pred))
+
+        return row

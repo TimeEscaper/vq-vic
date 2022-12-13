@@ -7,3 +7,4 @@ compressai==1.2.1
 vector-quantize-pytorch==0.10.14
 opencv-python==4.5.5.64
 nip-config==0.8.3
+py-rans==1.0.4

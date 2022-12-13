@@ -29,6 +29,9 @@ class LitAutoEncoderModule(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         return self._model.forward(x)
 
+    def compress(self, x: torch.Tensor):
+        return self._model.compress(x)
+
     def configure_optimizers(self):
         return self._optimizer
 

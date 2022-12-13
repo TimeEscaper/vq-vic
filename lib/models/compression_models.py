@@ -24,3 +24,7 @@ class VQVAE2CompressionModel(nn.Module):
         dec = self._vq_ae.decode(output)
         output.update(dec)
         return output
+
+    def compress(self, x: torch.Tensor):
+        output = self._vq_ae.encode(x)
+        output.update(self._entropy_model.compress(output))
