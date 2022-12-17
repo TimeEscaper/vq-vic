@@ -82,6 +82,33 @@ class CrossEntropyRateLoss(nn.Module):
 
 
 @nip
+class RateLoss(nn.Module):
+    
+    def __init__(self):
+        super(RateLoss, self).__init__()
+        
+    def forward(self, model_output: Dict[str, torch.Tensor], gt_image: torch.Tensor) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        bpp = 0.
+        num_pixels = gt_image.shape[0] * gt_image.shape[2] * gt_image.shape[3]
+        for k, v in model_output.items():
+            if k.endswith("_likelihoods"):
+                bpp = bpp + (torch.log(v).sum() / (-math.log(2) * num_pixels))
+        return bpp, {"loss_bpp": bpp}
+
+
+@nip
+class AuxLoss(nn.Module):
+
+    def __init__(self):
+        super(AuxLoss, self).__init__()
+
+    def forward(self, model_output: Dict[str, torch.Tensor], gt_image: torch.Tensor) -> \
+            Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        loss = model_output["loss_aux"]
+        return loss, {"loss_aux": loss}
+
+
+@nip
 class CompositeLoss(nn.Module):
 
     def __init__(self, components: List[Tuple[nn.Module, float]]):

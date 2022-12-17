@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from typing import Optional, Union, Tuple
 from nip import nip
 
+from .pixel_snail import CondResNet
+
 
 @nip
 class TransformerAREntropyModel(nn.Module):
@@ -27,7 +29,8 @@ class TransformerAREntropyModel(nn.Module):
                  activation: str = "relu",
                  norm_first: bool = False,
                  feedforward_dim: int = 2048,
-                 reduction: str = "mean"):
+                 reduction: str = "mean",
+                 condition_dim: Optional[int] = None):
         assert input_mode in (TransformerAREntropyModel.MODE_VECTORS, TransformerAREntropyModel.MODE_INDICES)
         assert reduction in (TransformerAREntropyModel._REDUCTION_MEAN, TransformerAREntropyModel._REDUCTION_SUM)
         if input_mode == TransformerAREntropyModel.MODE_VECTORS:
@@ -35,6 +38,7 @@ class TransformerAREntropyModel(nn.Module):
         else:
             assert embedding_dim is not None
             input_dim = code_book_size
+
         super(TransformerAREntropyModel, self).__init__()
 
         self._input_mode = input_mode
@@ -51,6 +55,10 @@ class TransformerAREntropyModel(nn.Module):
         else:
             self._embedding_layer = nn.Identity()
             embedding_dim = input_dim
+            
+        if condition_dim is not None:
+            self._condition_embedding_layer = nn.Linear(condition_dim, embedding_dim)
+            
         self._unembedding_layer = nn.Linear(embedding_dim, code_book_size)
 
         encoder_layer = nn.TransformerEncoderLayer(d_model=embedding_dim,
@@ -67,7 +75,7 @@ class TransformerAREntropyModel(nn.Module):
     def input_mode(self) -> str:
         return self._input_mode
 
-    def forward(self, x: torch.Tensor, output_softmax: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, output_softmax: bool = False, condition: Optional[torch.Tensor] = None) -> torch.Tensor:
         # x: (B, C, H, W) or (B, H, W)
         if self._input_mode == TransformerAREntropyModel.MODE_INDICES:
             x = F.one_hot(x, num_classes=self._code_book_size)
@@ -80,6 +88,14 @@ class TransformerAREntropyModel(nn.Module):
             .view(-1, self._block_len, C)  # B*H*W, block_len, C
         x_unfold = self._embedding_layer.forward(x_unfold)
         x_unfold = x_unfold * self._mask.clone().to(x_unfold.device)
+
+        if condition is not None:
+            condition = F.interpolate(condition, scale_factor=2)
+            c_unfold = F.unfold(condition, kernel_size=self._block_size, padding=(self._block_size[0] // 2,
+                                                                      self._block_size[1] // 2))
+            c_unfold = c_unfold.reshape(B, C, self._block_len, H * W).contiguous().view(-1, self._block_len, C)  # B*H*W, block_len, C
+            c_unfold = self._condition_embedding_layer.forward(c_unfold)
+            x_unfold = x_unfold + c_unfold
 
         x_out = self._transformer_encoder.forward(x_unfold)
         if self._reduction == TransformerAREntropyModel._REDUCTION_MEAN:

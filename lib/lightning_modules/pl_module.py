@@ -63,6 +63,10 @@ class LitAutoEncoderModule(pl.LightningModule):
             self.log(f"{phase}_loss", loss, on_epoch=True, batch_size=batch_size)
 
     def _common_epoch_end(self, phase: str):
+        
+        if phase == "train":
+            self._model.update()
+        
         if phase not in self._samples or self._samples[phase] is None or type(self.logger) != NeptuneLogger:
             return
 

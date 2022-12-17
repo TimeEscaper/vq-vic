@@ -157,3 +157,7 @@ dmypy.json
 
 # Neptune.ai
 .neptune/
+
+*.jpg
+*.jpeg
+*.png

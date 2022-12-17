@@ -3,30 +3,29 @@ experiment_params:
 #  path: &path "/storage/experiments"
 #  pretrained_ae_path: &pretrained_ae_path "/storage/experiments/remote/vq/VQVIC-40/checkpoint.ckpt"
   path: &path "/data/shared/svc/experiments"
-  dataset_root: &dataset_root "/data/shared/svc/datasets/celeba_hq_256"
-  pretrained_ae_path: &pretrained_ae_path "/data/shared/svc/pretrained/vq_vae/VQVIC-40/checkpoint.ckpt"
+  dataset_root: &dataset_root "/data/shared/svc/datasets/vimeo90k/vimeo_septuplet"
   dataloader_workers: &dataloader_workers 12
   image_resolution: &image_resolution (256, 256)
 
-  gpu: &gpu 4
+  gpu: &gpu 1
 
-  lr: &lr 3e-4
+  lr: &lr 3e-5
+  wd: &wd 1e-2
   epochs: &epochs 1000
-  batch_size: &batch_size 8
+  batch_size: &batch_size 12
 
   n_residual_blocks: &n_residual_blocks 3
-  code_book_dim: &code_book_dim 128
-  code_book_size: &code_book_size 512
+  code_book_dim: &code_book_dim 256
+  code_book_size: &code_book_size 2048
 
   ema_decay: &vq_ema_decay 0.99
-  commit_weight: &commit_weight 0.25
+  commit_weight: &commit_weight 0.1
 
-  lmbda: &lmbda 2
+  lmbda: &lmbda 1
 
 
 ### Trainer
 trainer: !Trainer
-  gradient_clip_val: 0.5
   deterministic: False
   benchmark: True
   gpus: `[gpu]`
@@ -35,26 +34,37 @@ trainer: !Trainer
     project: timeescaper/vq-vic
     log_model_checkpoints: True
     tags:
-      - "compression"
-      - "vq2"
-      - "celeba"
+      - "vimeo"
+      - "distortion"
   callbacks:
     - !ModelCheckpoint
       save_top_k: 1
       save_last: True
       every_n_epochs: 1
-  check_val_every_n_epoch: 1
+      monitor: "val_loss"
+  check_val_every_n_epoch: 5
   log_every_n_steps: 1
 
 
 ### Datasets
-train_dataset: &train_dataset !ImagesDataset
-  root_dir: *dataset_root
-  segment: (0, 25000)
+train_dataset: &train_dataset !VimeoImagesDataset
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_trainlist.txt"`
+  transform: !Compose
+    transforms:
+      - !CenterCrop
+        size: *image_resolution
+      - !ToTensor
 
-val_dataset: &val_dataset !ImagesDataset
-  root_dir: *dataset_root
-  segment: (25000, 30000)
+val_dataset: &val_dataset !VimeoImagesDataset
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_testlist.txt"`
+  segment: (0, 500)
+  transform: !Compose
+    transforms:
+      - !CenterCrop
+        size: *image_resolution
+      - !ToTensor
 
 train_dataloader: !DataLoader
   dataset: *train_dataset
@@ -71,12 +81,12 @@ val_dataloader: !DataLoader
 
 # Model
 encoder_bottom: &encoder_bottom !ConvEncoder
-  channels: (64, 128, 256)
+  channels: (64, 128)
   n_residual_blocks: *n_residual_blocks
 
 encoder_top: &encoder_top !ConvEncoder
-  channels: (256,)
-  in_channels: 256
+  channels: (128,)
+  in_channels: 128
   n_residual_blocks: *n_residual_blocks
 
 decoder_top: &decoder_top !ConvDecoder
@@ -85,10 +95,10 @@ decoder_top: &decoder_top !ConvDecoder
   n_residual_blocks: *n_residual_blocks
 
 decoder_bottom: &decoder_bottom !ConvDecoder
-  channels: `(code_book_dim * 2, 128, 64)`
+  channels: `(code_book_dim * 2, 64)`
   n_residual_blocks: *n_residual_blocks
 
-ae_model: &ae_model !VectorQuantizedAE2
+ae_model_template: &ae_model_template !VectorQuantizedAE2
   encoder_bottom: *encoder_bottom
   decoder_bottom: *decoder_bottom
   encoder_top: *encoder_top
@@ -97,53 +107,69 @@ ae_model: &ae_model !VectorQuantizedAE2
   code_book_size: *code_book_size
   decay: *vq_ema_decay
 
-entropy_top: &entropy_top !TransformerAREntropyModel
-  input_mode: "vectors"
-  code_book_size: *code_book_size
-  block_size: 5
-  input_dim: *code_book_dim
-  embedding_dim: 128
-  depth: 4
-  num_heads: 4
+ae_model: &ae_model !pretrained
+  model: *ae_model_template
+  eval_mode: true
+  freeze_model: true
+  module_name: "_model"
+  ckpt_path: "/data/shared/svc/pretrained/vq_vae/VQVIC-88/checkpoint.ckpt"
 
-entropy_bottom: &entropy_bottom !TransformerAREntropyModel
+entropy_bottom: &entropy_bottom !PixelSNAIL
   input_mode: "vectors"
-  code_book_size: *code_book_size
-  block_size: 5
   input_dim: *code_book_dim
-  embedding_dim: 128
-  depth: 4
-  num_heads: 4
+  shape: (64, 64)
+  n_class: *code_book_size
+  channel: 256
+  kernel_size: 5
+  n_block: 4
+  n_res_block: 4
+  res_channel: 256
+  dropout: 0.1
+  attention: false
+  n_cond_res_block: 3
+  cond_res_channel: 256
 
-entropy_model: &entropy_model !TopBottomTransformerAREntropyModel
+entropy_top: &entropy_top !PixelSNAIL
+  input_mode: "vectors"
+  input_dim: *code_book_dim
+  shape: (32, 32)
+  n_class: *code_book_size
+  channel: 256
+  kernel_size: 5
+  n_block: 4
+  n_res_block: 4
+  res_channel: 256
+  dropout: 0.1
+  n_out_res_block: 0
+
+entropy_model: &entropy_model !TopBottomPixelSNAIL
   top_model: *entropy_top
   bottom_model: *entropy_bottom
+  ignore: "bottom"
 
 model: &model !VQVAE2CompressionModel
   vq_ae: *ae_model
-  # vq_ae: !pretrained
-  #  model: *ae_model
-  #  ckpt_path: *pretrained_ae_path
-  #  eval_mode: false
-  #  freeze_model: false
-  #  module_name: "_model"
   entropy_model: *entropy_model
 
+
 # Loss
-rate_loss: &rate_loss !CrossEntropyRateLoss
 dist_loss: &dist_loss !MSEWrapLoss
 commit_loss: &commit_loss !CommitLoss
+rate_loss: &rate_loss !CrossEntropyRateLoss
 
+# loss: &loss !CompositeLoss
+#   components: `[(dist_loss, 1.), (commit_loss, commit_weight)]`
 loss: &loss !CompositeLoss
-  components: `[(rate_loss, 1.), (dist_loss, lmbda), (commit_loss, commit_weight)]`
+  components: `[(rate_loss, 1.)]`
 
 
 ### Lightning Module
 pl_module: !LitAutoEncoderModule
   model: *model
-  optimizer: !Adam
+  optimizer: !AdamW
     lr: *lr
     params: `model.parameters()`
+    weight_decay: *wd
   loss: *loss
   sample_train: `train_dataset[0]`
   sample_val: `val_dataset[0]`

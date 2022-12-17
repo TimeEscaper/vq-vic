@@ -3,14 +3,16 @@ experiment_params:
 #  path: &path "/storage/experiments"
 #  pretrained_ae_path: &pretrained_ae_path "/storage/experiments/remote/vq/VQVIC-40/checkpoint.ckpt"
   path: &path "/data/shared/svc/experiments"
-  dataset_root: &dataset_root "/data/shared/svc/datasets/celeba_hq_256"
-  pretrained_ae_path: &pretrained_ae_path "/data/shared/svc/pretrained/vq_vae/VQVIC-76/checkpoint.ckpt"
+  dataset_root: &dataset_root "/data/shared/svc/datasets/vimeo90k/vimeo_septuplet"
+  pretrained_ae_path: &pretrained_ae_path "/data/shared/svc/pretrained/vq_vae/VQVIC-80/checkpoint.ckpt"
+  pretrained_top_path: &pretrained_top_path "/data/shared/svc/pretrained/vq_vae/VQVIC-81/checkpoint.ckpt"
   dataloader_workers: &dataloader_workers 12
   image_resolution: &image_resolution (256, 256)
 
-  gpu: &gpu 4
+  gpu: &gpu 1
 
-  lr: &lr 1e-4
+  lr: &lr 3e-4
+  wd: &wd 1e-2
   epochs: &epochs 1000
   batch_size: &batch_size 12
 
@@ -35,25 +37,38 @@ trainer: !Trainer
     log_model_checkpoints: True
     tags:
       - "compression"
-      - "vq2"
-      - "celeba"
+      - "vimeo"
+      - "bottom_rate"
   callbacks:
     - !ModelCheckpoint
       save_top_k: 1
       save_last: True
       every_n_epochs: 1
+      monitor: "val_loss"
   check_val_every_n_epoch: 5
   log_every_n_steps: 1
 
 
 ### Datasets
-train_dataset: &train_dataset !ImagesDataset
-  root_dir: *dataset_root
-  segment: (0, 25000)
+train_dataset: &train_dataset !VimeoImagesDataset
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_trainlist.txt"`
+  segment: (0, 10000)
+  transform: !Compose
+    transforms:
+      - !CenterCrop
+        size: *image_resolution
+      - !ToTensor
 
-val_dataset: &val_dataset !ImagesDataset
-  root_dir: *dataset_root
-  segment: (25000, 30000)
+val_dataset: &val_dataset !VimeoImagesDataset
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_testlist.txt"`
+  segment: (0, 500)
+  transform: !Compose
+    transforms:
+      - !CenterCrop
+        size: *image_resolution
+      - !ToTensor
 
 train_dataloader: !DataLoader
   dataset: *train_dataset
@@ -87,7 +102,7 @@ decoder_bottom: &decoder_bottom !ConvDecoder
   channels: `(code_book_dim * 2, 64)`
   n_residual_blocks: *n_residual_blocks
 
-ae_model: &ae_model !VectorQuantizedAE2
+ae_model_template: &ae_model_template !VectorQuantizedAE2
   encoder_bottom: *encoder_bottom
   decoder_bottom: *decoder_bottom
   encoder_top: *encoder_top
@@ -95,6 +110,13 @@ ae_model: &ae_model !VectorQuantizedAE2
   code_book_dim: *code_book_dim
   code_book_size: *code_book_size
   decay: *vq_ema_decay
+
+ae_model: &ae_model !pretrained
+  model: *ae_model_template
+  eval_mode: true
+  freeze_model: true
+  module_name: "_model._vq_ae"
+  ckpt_path: *pretrained_ae_path
 
 entropy_bottom: &entropy_bottom !PixelSNAIL
   input_mode: "indices"
@@ -111,7 +133,7 @@ entropy_bottom: &entropy_bottom !PixelSNAIL
   n_cond_res_block: 3
   cond_res_channel: 256
 
-entropy_top: &entropy_top !PixelSNAIL
+entropy_top_template: &entropy_top_template !PixelSNAIL
   input_mode: "indices"
   input_dim: *code_book_dim
   shape: (32, 32)
@@ -124,21 +146,21 @@ entropy_top: &entropy_top !PixelSNAIL
   dropout: 0.1
   n_out_res_block: 0
 
+entropy_top: &entropy_top !pretrained
+  model: *entropy_top_template
+  eval_mode: true
+  freeze_model: true
+  module_name: "_model._entropy_model._top_model"
+  ckpt_path: *pretrained_top_path
+
 entropy_model: &entropy_model !TopBottomPixelSNAIL
   top_model: *entropy_top
   bottom_model: *entropy_bottom
-  ignore: "top"
+  # ignore: "top"
 
-model_template: &model_template !VQVAE2CompressionModel
+model: &model !VQVAE2CompressionModel
   vq_ae: *ae_model
   entropy_model: *entropy_model
-
-model: &model !pretrained
-  model: *model_template
-  eval_mode: false
-  freeze_model: false
-  module_name: "_model"
-  ckpt_path: *pretrained_ae_path
 
 # model: &model !VQVAE2CompressionModel
 #   vq_ae: !pretrained
@@ -150,8 +172,12 @@ model: &model !pretrained
 #   entropy_model: *entropy_model
 
 # Loss
+# dist_loss: &dist_loss !MSEWrapLoss
+# commit_loss: &commit_loss !CommitLoss
 rate_loss: &rate_loss !CrossEntropyRateLoss
 
+# loss: &loss !CompositeLoss
+#   components: `[(dist_loss, 1.), (commit_loss, commit_weight)]`
 loss: &loss !CompositeLoss
   components: `[(rate_loss, 1.)]`
 

@@ -1,5 +1,8 @@
 import torch
 import torch.nn as nn
+import rans.rANSCoder as rANS
+import numpy as np
+import torchac
 
 from typing import Dict, Optional, Any
 from tqdm import tqdm
@@ -34,16 +37,16 @@ class TopBottomTransformerAREntropyModel(nn.Module):
                                                                output_softmax)
         if self._ignore != "bottom":
             TopBottomTransformerAREntropyModel._forward_single(self._bottom_model, "bottom", encoder_output, output_dict,
-                                                               output_softmax)
+                                                               output_softmax, condition=encoder_output["y_top"])
 
         return output_dict
 
     @staticmethod
     def _forward_single(model: TransformerAREntropyModel, name: str, encoder_output: Dict[str, torch.Tensor],
-                        output_dict: Dict[str, torch.Tensor], output_softmax: bool) -> None:
+                        output_dict: Dict[str, torch.Tensor], output_softmax: bool, condition = None) -> None:
         in_key = f"y_{name}" if model.input_mode == TransformerAREntropyModel.MODE_VECTORS else f"y_{name}_indices"
         out_key = f"y_{name}_probs" if output_softmax else f"y_{name}_probs_raw"
-        output_dict[out_key] = model.forward(encoder_output[in_key], output_softmax=output_softmax)
+        output_dict[out_key] = model.forward(encoder_output[in_key], output_softmax=output_softmax, condition=condition)
 
 
 @nip
@@ -76,7 +79,12 @@ class TopBottomPixelSNAIL(nn.Module):
     def compress(self, encoder_output: Dict[str, torch.Tensor]) -> Dict[str, Any]:
         output_dict = {}
 
-        TopBottomPixelSNAIL._compress_single(self._top_model, "top", encoder_output, condition=None)
+        top = TopBottomPixelSNAIL._compress_single(self._top_model, "top", encoder_output, output_dict, 
+                                                   condition=None)
+        _ = TopBottomPixelSNAIL._compress_single(self._bottom_model, "bottom", encoder_output, output_dict, 
+                                                 condition=top)
+        
+        return output_dict
 
     @staticmethod
     def _forward_single(model: PixelSNAIL, name: str, encoder_output: Dict[str, torch.Tensor],
@@ -90,31 +98,59 @@ class TopBottomPixelSNAIL(nn.Module):
 
     @staticmethod
     def _compress_single(model: PixelSNAIL, name: str, encoder_output: Dict[str, torch.Tensor],
-                         condition: Optional[torch.Tensor] = None):
+                         output_dict: Dict[str, torch.Tensor], condition: Optional[torch.Tensor] = None):
         latent = encoder_output[f"y_{name}" if model.input_mode == "vectors" else f"y_{name}_indices"]
         if len(latent.shape) == 4:
-            B, _, H, W = latent.shape
+            B, C, H, W = latent.shape
+            row = torch.zeros(B, C, H, W).to(latent.device)
         else:
             B, H, W = latent.shape
+            row = torch.zeros(B, H, W, dtype=torch.int64).to(latent.device)
 
-        row = torch.zeros(B, H, W, dtype=torch.int64).to(latent.device)
         probs = torch.zeros(B, model.n_class, H, W).to(latent.device)
         cache = {}
 
         strings = None
+
+        # encoder = rANS.Encoder()
+
+        latent_np = latent.clone().detach().cpu().numpy().astype(np.int32)
 
         for i in tqdm(range(H), leave=False):
             for j in tqdm(range(W), leave=False):
                 if len(latent.shape) == 4:
                     prob, cache = model.forward(row[:, :, : i + 1, :], condition=condition, cache=cache,
                                                 output_softmax=True)
+                    row[:, :, i, j] = latent[:, :, i, j]
                 else:
                     prob, cache = model.forward(row[:, : i + 1, :], condition=condition, cache=cache,
                                                 output_softmax=True)
-                row[:, i, j] = latent[:, i, j]
-                probs[:, :, i, j] = prob[:, :, i, j]
+                    row[:, i, j] = latent[:, i, j]
+                prob = prob[:, :, i, j]
+                probs[:, :, i, j] = prob
+                    
+                # encoder.encode_symbol(prob.clone().detach().cpu().numpy().astype(np.float32), latent_np[b, i, j])
+                    
+        latent_indices = encoder_output[f"y_{name}_indices"]
+        cdf = TopBottomPixelSNAIL._probs_to_cdf(probs)
+        latent_int = latent_indices.clone().detach().cpu().unsqueeze(1).to(torch.int16)
+        byte_stream = torchac.encode_float_cdf(cdf, latent_int, check_input_bounds=True)
 
-        probs_pred, _ = model.forward(latent, condition=condition, cache=cache, output_softmax=True)
-        print(torch.allclose(probs, probs_pred))
+        output_dict[f"y_{name}_strings"] = byte_stream # encoder.get_encoded()
+        output_dict[f"y_{name}_probs"] = probs
+        
+        return latent
 
-        return row
+    @staticmethod
+    def _probs_to_cdf(probs: torch.Tensor) -> torch.Tensor:
+        pmf = probs.clone().detach().cpu().permute(0, 2, 3, 1).unsqueeze(1)
+        cdf = pmf.cumsum(dim=-1)
+        spatial_dimensions = pmf.shape[:-1] + (1,)
+        zeros = torch.zeros(spatial_dimensions, dtype=pmf.dtype, device=pmf.device)
+        cdf_with_0 = torch.cat([zeros, cdf], dim=-1)
+        # On GPU, softmax followed by cumsum can lead to the final value being 
+        # slightly bigger than 1, so we clamp.
+        cdf_with_0 = cdf_with_0.clamp(max=1.)
+        return cdf_with_0
+        
+        

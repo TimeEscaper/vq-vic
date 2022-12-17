@@ -1,1 +1,1 @@
-from .images_dataset import ImagesDataset
+from .images_dataset import ImagesDataset, VimeoImagesDataset

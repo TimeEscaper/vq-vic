@@ -8,20 +8,20 @@ experiment_params:
   dataloader_workers: &dataloader_workers 12
   image_resolution: &image_resolution (256, 256)
 
-  gpu: &gpu 4
+  gpu: &gpu 1
 
   lr: &lr 3e-4
   epochs: &epochs 1000
-  batch_size: &batch_size 8
+  batch_size: &batch_size 3
 
   n_residual_blocks: &n_residual_blocks 3
-  code_book_dim: &code_book_dim 128
+  code_book_dim: &code_book_dim 64
   code_book_size: &code_book_size 512
 
   ema_decay: &vq_ema_decay 0.99
   commit_weight: &commit_weight 0.25
 
-  lmbda: &lmbda 2
+  lmbda: &lmbda 1
 
 
 ### Trainer
@@ -71,12 +71,12 @@ val_dataloader: !DataLoader
 
 # Model
 encoder_bottom: &encoder_bottom !ConvEncoder
-  channels: (64, 128, 256)
+  channels: (64, 128)
   n_residual_blocks: *n_residual_blocks
 
 encoder_top: &encoder_top !ConvEncoder
-  channels: (256,)
-  in_channels: 256
+  channels: (128,)
+  in_channels: 128
   n_residual_blocks: *n_residual_blocks
 
 decoder_top: &decoder_top !ConvDecoder
@@ -85,7 +85,7 @@ decoder_top: &decoder_top !ConvDecoder
   n_residual_blocks: *n_residual_blocks
 
 decoder_bottom: &decoder_bottom !ConvDecoder
-  channels: `(code_book_dim * 2, 128, 64)`
+  channels: `(code_book_dim * 2, 64)`
   n_residual_blocks: *n_residual_blocks
 
 ae_model: &ae_model !VectorQuantizedAE2
@@ -120,13 +120,12 @@ entropy_model: &entropy_model !TopBottomTransformerAREntropyModel
   bottom_model: *entropy_bottom
 
 model: &model !VQVAE2CompressionModel
-  vq_ae: *ae_model
-  # vq_ae: !pretrained
-  #  model: *ae_model
-  #  ckpt_path: *pretrained_ae_path
-  #  eval_mode: false
-  #  freeze_model: false
-  #  module_name: "_model"
+  vq_ae: !pretrained
+    model: *ae_model
+    ckpt_path: *pretrained_ae_path
+    eval_mode: false
+    freeze_model: false
+    module_name: "_model"
   entropy_model: *entropy_model
 
 # Loss
