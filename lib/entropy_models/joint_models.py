@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import rans.rANSCoder as rANS
-import numpy as np
 import torchac
 
 from typing import Dict, Optional, Any
@@ -109,13 +107,7 @@ class TopBottomPixelSNAIL(nn.Module):
 
         probs = torch.zeros(B, model.n_class, H, W).to(latent.device)
         cache = {}
-
-        strings = None
-
-        # encoder = rANS.Encoder()
-
-        latent_np = latent.clone().detach().cpu().numpy().astype(np.int32)
-
+        
         for i in tqdm(range(H), leave=False):
             for j in tqdm(range(W), leave=False):
                 if len(latent.shape) == 4:
@@ -128,9 +120,7 @@ class TopBottomPixelSNAIL(nn.Module):
                     row[:, i, j] = latent[:, i, j]
                 prob = prob[:, :, i, j]
                 probs[:, :, i, j] = prob
-                    
-                # encoder.encode_symbol(prob.clone().detach().cpu().numpy().astype(np.float32), latent_np[b, i, j])
-                    
+                                        
         latent_indices = encoder_output[f"y_{name}_indices"]
         cdf = TopBottomPixelSNAIL._probs_to_cdf(probs)
         latent_int = latent_indices.clone().detach().cpu().unsqueeze(1).to(torch.int16)
@@ -148,8 +138,6 @@ class TopBottomPixelSNAIL(nn.Module):
         spatial_dimensions = pmf.shape[:-1] + (1,)
         zeros = torch.zeros(spatial_dimensions, dtype=pmf.dtype, device=pmf.device)
         cdf_with_0 = torch.cat([zeros, cdf], dim=-1)
-        # On GPU, softmax followed by cumsum can lead to the final value being 
-        # slightly bigger than 1, so we clamp.
         cdf_with_0 = cdf_with_0.clamp(max=1.)
         return cdf_with_0
         

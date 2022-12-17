@@ -28,7 +28,7 @@ def _estimate_zlib_bits(y_hat: torch.Tensor) -> float:
 
 def _open_image(image_path: Path):
     with Image.open(str(image_path)) as img:
-        to_tensor = Compose([CenterCrop((256, 256)), ToTensor()])
+        to_tensor = ToTensor()
         gt_image = to_tensor(img)
     return gt_image
 

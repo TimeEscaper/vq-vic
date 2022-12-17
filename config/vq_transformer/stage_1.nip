@@ -1,0 +1,135 @@
+experiment_params: 
+  path: &path "TODO: path where your experiment will be stored"
+  dataset_root: &dataset_root "TODO: Path to the root of the Vimeo90k dataset"
+
+  dataloader_workers: &dataloader_workers 12
+  image_resolution: &image_resolution (256, 256)
+
+  gpu: &gpu 0  # You may change the GPU
+  lr: &lr 3e-05
+  wd: &wd 0.01
+
+  epochs: &epochs 1000
+  batch_size: &batch_size 3
+
+  n_residual_blocks: &n_residual_blocks 3
+  code_book_dim: &code_book_dim 64
+  code_book_size: &code_book_size 512
+  ema_decay: &vq_ema_decay 0.99
+  commit_weight: &commit_weight 0.1
+
+trainer: !Trainer 
+  deterministic: False
+  benchmark: True
+  gpus: `[gpu]`
+  max_epochs: *epochs
+  callbacks: 
+    - !ModelCheckpoint 
+      save_top_k: 1
+      save_last: True
+      every_n_epochs: 1
+      monitor: "val_loss"
+  check_val_every_n_epoch: 5
+  log_every_n_steps: 1
+
+train_dataset: &train_dataset !VimeoImagesDataset 
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_trainlist.txt"`
+  transform: !Compose 
+    transforms: 
+      - !CenterCrop 
+        size: *image_resolution
+      - !ToTensor 
+
+val_dataset: &val_dataset !VimeoImagesDataset 
+  sequences_root: `f"{dataset_root}/sequences"`
+  subset_list: `f"{dataset_root}/sep_testlist.txt"`
+  transform: !Compose 
+    transforms: 
+      - !CenterCrop 
+        size: *image_resolution
+      - !ToTensor 
+
+train_dataloader: !DataLoader 
+  dataset: *train_dataset
+  batch_size: *batch_size
+  shuffle: True
+  num_workers: *dataloader_workers
+val_dataloader: !DataLoader 
+  dataset: *val_dataset
+  batch_size: *batch_size
+  shuffle: False
+  num_workers: *dataloader_workers
+
+
+encoder_bottom: &encoder_bottom !ConvEncoder 
+  channels: (64, 128)
+  n_residual_blocks: *n_residual_blocks
+
+encoder_top: &encoder_top !ConvEncoder 
+  channels: (128,)
+  in_channels: 128
+  n_residual_blocks: *n_residual_blocks
+
+decoder_top: &decoder_top !ConvDecoder 
+  channels: `(code_book_dim,)`
+  out_channels: *code_book_dim
+  n_residual_blocks: *n_residual_blocks
+
+decoder_bottom: &decoder_bottom !ConvDecoder 
+  channels: `(code_book_dim * 2, 64)`
+  n_residual_blocks: *n_residual_blocks
+
+ae_model: &ae_model !VectorQuantizedAE2 
+  encoder_bottom: *encoder_bottom
+  decoder_bottom: *decoder_bottom
+  encoder_top: *encoder_top
+  decoder_top: *decoder_top
+  code_book_dim: *code_book_dim
+  code_book_size: *code_book_size
+  decay: *vq_ema_decay
+
+entropy_top: &entropy_top !TransformerAREntropyModel 
+  input_mode: "vectors"
+  code_book_size: *code_book_size
+  block_size: 5
+  input_dim: *code_book_dim
+  embedding_dim: 128
+  depth: 4
+  num_heads: 4
+
+entropy_bottom: &entropy_bottom !TransformerAREntropyModel 
+  input_mode: "vectors"
+  code_book_size: *code_book_size
+  block_size: 5
+  input_dim: *code_book_dim
+  embedding_dim: 128
+  depth: 4
+  num_heads: 4
+  condition_dim: *code_book_dim
+
+entropy_model: &entropy_model !TopBottomTransformerAREntropyModel 
+  top_model: *entropy_top
+  bottom_model: *entropy_bottom
+  ignore: "bottom"
+
+model: &model !VQVAE2CompressionModel 
+  vq_ae: *ae_model
+  entropy_model: *entropy_model
+
+
+dist_loss: &dist_loss !MSEWrapLoss 
+commit_loss: &commit_loss !CommitLoss 
+loss: &loss !CompositeLoss 
+  components: `[(dist_loss, 1.), (commit_loss, commit_weight)]`
+
+
+pl_module: !LitAutoEncoderModule 
+  model: *model
+  optimizer: !AdamW 
+    lr: *lr
+    params: `model._vq_ae.parameters()`
+    weight_decay: *wd
+  loss: *loss
+  sample_train: `train_dataset[0]`
+  sample_val: `val_dataset[0]`

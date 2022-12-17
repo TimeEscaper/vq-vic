@@ -1,3 +1,5 @@
+# Derived from TIC: https://github.com/lumingzzz/TIC/blob/main/compressai/layers/layers.py#L725
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
